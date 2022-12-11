@@ -206,6 +206,8 @@ The analysis code written in `R` is included throughout and at the bottom of the
 | Tay, J. K., Friedman, J. & Tibshirani, R. (2021). Principal component‐guided sparse regression.	Canadian 
 |    Journal of Statistics, 49(4), 1222--1257. <https://doi.org/10.1002/cjs.11617>
 
+| *FIFA 18* Data: <https://public.tableau.com/s/sites/default/files/media/fifa18_clean.csv>
+
 ```{r include=F}
 # Make test set a matrix
 X_st_test = as.matrix(st_test[,2:ncol(st_test)])
