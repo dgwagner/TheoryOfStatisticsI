@@ -1,0 +1,357 @@
+---
+title: "Final Project: Exact Solution for Sparse Regression"
+author: "Derek Wagner"
+header-includes:
+    - \usepackage{titling}
+    - \usepackage{setspace}\doublespacing
+date: "12/11/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(pcLasso)
+library(kableExtra)
+```
+
+\newpage
+
+## Executive Summary
+
+Sparse regression is a difficult problem in statistics, since fitting models to high-dimensional data leads to overfitting and poor predictive power. Popular heuristic methods of solving the sparse regression problem, such as `Lasso` and ridge regression, are useful but come with certain theoretical drawbacks: `Lasso` produces biased estimates, and ridge regression does not accomplish the goal of feature reduction.
+
+In the paper "Sparse high-dimensional regression: Exact scalable algorithms and phase transitions" (2020) by Dimitris Bertsimas and Bart Van Parys, the authors describe a new approach to solving the sparse regression problem by finding an exact solution to the optimization problem underlying sparse regression. In this paper, the cutting-plane algorithm presented by Bertsimas and Van Parys will be applied to the task of predicting player wages in the *FIFA 18* video game. To assess the claims of the authors, the cutting plane method will be compared with principal components lasso (*pcLasso*), a state-of-the-art version of the traditional `Lasso` regression method that is referenced as a competitor to the new algorithm.
+
+The results of this analysis confirm the claims of Bertsimas and Van Parys in a relatively small use-case as compared to the $p >$ 100,000 cases discussed in their paper. The cutting-plane algorithm successfully results in lower $MSE$ than pcLasso models fit to the same data.
+
+\newpage
+
+## Project Description
+
+### Literature Review
+
+Regression problems wherein there are a relatively large number of regressors $p$ compared to the number of observations $n$ are called sparse regression problems. Sparse regression poses a difficult challenge to researchers because traditional methods of linear regression become less useful in this setting. This is sometimes called the "curse of dimensionality." The curse of dimensionality can be explained by the change in the sample space that occurs when more regressors are added. As regressors are added, the volume of the sample space increases exponentially. When imagining the sample space geometrically, the Euclidian distance between points can be seen to increase greatly with each regressor that is added. Thus, any model that is fit to the data will require more parameters and a more complex shape, and with a sparse amount of data, estimates will either result in very high loss function values (e.g. high $MSE$) or "overfitting," where the model parameter estimates are not predictive of additional data points. Thus, in both cases, the model is ineffective.
+
+Define $X$ as an $n \times p$ data matrix and $Y$ as the response vector of length $n$. Per Bertsimas and Van Parys (2020), "the problem of linear regression with a Tikhonov (1943) regularization term and an explicit sparsity constraint is defined as
+
+$$\begin{aligned}\text{min}_{\mathbf{w}} \frac{1}{2\gamma}||w||_2^2+\frac{1}{2}||Y-Xw||_2^2\\
+\text{s.t. }||w||_0 \le k
+\end{aligned}$$
+
+where $\gamma > 0$ is a given weight that controls the importance of the regularization term" (p. 300).
+
+The authors are describing a specific version of the general problem from which three major heuristic solutions are derived: `Lasso` regression, ridge regression, and Elastic Net regularization. In this class of methods for finding a solution, the curse of dimensionality is remedied by removing regressors that do not explain a sufficient amount of variability in the data. This is done by setting a sparsity constraint $k$ that limits the number of regressors that will be retained.
+
+Bertsimas and Van Parys describe how the Elastic Net and `Lasso` methods solve a similar problem, except the functional constraint of the optimization problem is changed to
+
+$$\text{s.t. } ||w||_1 \le \lambda$$
+
+The new $\ell_1$-norm term "shrinks the regressor coefficients toward zero" (p. 301). Thus regressors that are unimportant can be reduced to zero in the model. This differs from another popular method, ridge regression, which uses an $\ell_2$-norm to enforce a penalty that also causes the coefficients of unimportant terms to go towards zero, but does not actually reduce them all the way. Thus, ridge regression does not reduce dimensionality, whereas `Lasso` and Elastic Net do.
+
+Bertsimas and Van Parys go on to explain the shortcomings of `Lasso` and Elastic Net. They write: "the `Lasso` leads to biased regression regressors, since the $\ell_1$-norm penalizes both large and small coefficients uniformly" (p. 301). As the $\ell_0$-norm does not result in biased shrinking, it is preferred by Bertsimas and Van Parys. However, using the $\ell_0$-norm requires the computation of an exact solution that was out of technical reach for years (p. 301-302).
+
+The solution presented by Bertsimas and Van Parys starts by reformulating the sparse regression problem as a pure binary convex optimization problem by using the dual of an unconstrained version of the regression problem. Due to the limitations in directly solving a convex integer optimization (CIO) problem of this type, the authors then go on to develop a cutting plane algorithm that "iteratively solves increasingly better MIO approximations to the CIO formulation" (p. 310), where "MIO" stands for mixed integer optimization. Bertsimas, Pauphilet, and Van Parys (2020) provide a `Julia` package called `SubsetSelection` that implements the cutting plane algorithm using commercial solvers such as Gurobi.
+
+Bertsimas and Van Parys purport to present a superior method for solving the sparse regression problem with their cutting plane algorithm. They claim that their exact scalable solution provides more accuracy than `Lasso` or Elastic Net methods (p. 314), specifically comparing against the `GLMNet` implementation by Friedman, Hastie, and Tibshirani (p. 315) in their R package published in 2013. Among their claims are that the new algorithm can solve problems with *n* and *p* in the 100,000s (p. 313) and that the algorithm solves the problem more quickly relative to `Lasso` as the sample size increases. In addition, the cutting plane algorithm is shown to produce more accurate predictions than `Lasso`, particularly at smaller sample sizes (Bertsimas and Van Parys, p. 316). In order to evaluate these claims, the same problem will be solved in this paper using the cutting plane algorithm and with a state-of-the-art heuristic method called "principal components lasso" (pcLasso), a recent innovation on the `Lasso` by Tay, Friedman, and Tibshirani (2018).
+
+Per Tay *et al.*, pcLasso combines the $\ell_1$-norm penalty from Lasso with a "a quadratic penalty that shrinks the coefficient vector toward the leading principal components of the feature matrix" (p. 1). A brief description of principal components is warranted: principal components analysis is a method of dimensionality reduction that creates orthogonal linear combinations of regressors (called principal components) such that each successive principal component captures as much of the variation in the data as possible. A common and parsimonious way to create these principal components is by finding the singular value decomposition (SVD) of the data matrix $\textbf{X}=\textbf{UDV}^T$ (Tay *et al*. p. 2). The right singular vectors of **X** are the principal components.
+
+Tay *et al.* generate an additional penalty term based upon the principal components, using "the form
+
+$$\beta^T\textbf{VZV}^T\beta$$
+
+where **Z** is a diagonal matrix whose diagonal elements are functions of the squared singular values" (p. 2).
+
+The benefits of pcLasso, per Tay *et al.*, are that it provides strong predictive performance while incorporating the dimensionality reduction of principal components analysis (p. 20). These claims are quite similar to those of Bertsimas and Van Parys, making a comparison of the two methods an enticing line of investigation.
+
+### Data Description
+
+The dataset to be used in this paper is the *FIFA 18* player attributes dataset. The first six rows and the first four columns of the data are displayed below:
+
+```{r echo=F}
+df = read.csv("C:/Users/wagnedg1/Documents/EP/fifa18_clean.csv")
+colnames(df)[1] = "Wage"
+colnames(df)[2] = "Value"
+kable(head(df%>%select(c(1:4))))%>%
+  kable_styling(position = "center", latex_options="HOLD_position")
+```
+
+The goal of the analysis is to predict `Wage` using the factors in the *FIFA 18* dataset. However, the dataset has 17,981 observations and only 63 regressors (once extraneous or excluded columns are removed); as the purpose of this analysis is to test the performance of different methods in the sparse regression scenario, the dataset will be subdivided by primary position to create sub-datasets with high dimensionality. Additionally, the `Value` variable will be excluded, as it is meant to represent the contract value of a player which is tied directly to `Wage`. Likewise, the `Overall` variable is also excluded as it is a composite of the other regressors. Another possible analysis path would be to use `Overall` as a response variable, but because `Overall` is calculated from the attributes via a formula and without randomness, such an analysis would lack an error term $\epsilon$ and also not be very practically useful aside from peeking behind the game developers' curtain.
+
+```{r echo=F}
+df = df%>%mutate(Primary.Position = sub(" .*","",Preferred.Positions),
+                 Player_ID = paste(Name,Club))
+df = df%>%group_by(Player_ID)%>% 
+  filter(row_number()==1)
+df = as.data.frame(df)
+row.names(df) = df$Player_ID
+df = df%>%filter(Club != "")
+df = df%>%filter(Primary.Position != "GK") # Remove goalies due to incomplete data
+df = df%>%select(1,4,9,12:51,53:75) # Remove unnecessary columns
+#rownames(df) = df$Name
+df = na.omit(df)
+```
+
+```{r echo=F}
+df_st = df%>%filter(Primary.Position == "ST")%>%select(-c(Preferred.Positions, Primary.Position))
+df_rw = df%>%filter(Primary.Position == "RW")%>%select(-c(Preferred.Positions, Primary.Position))
+df_lw = df%>%filter(Primary.Position == "LW")%>%select(-c(Preferred.Positions, Primary.Position))
+df_cdm = df%>%filter(Primary.Position == "CDM")%>%select(-c(Preferred.Positions, Primary.Position))
+df_cb = df%>%filter(Primary.Position == "CB")%>%select(-c(Preferred.Positions, Primary.Position))
+df_rm = df%>%filter(Primary.Position == "RM")%>%select(-c(Preferred.Positions, Primary.Position))
+df_cm = df%>%filter(Primary.Position == "CM")%>%select(-c(Preferred.Positions, Primary.Position))
+df_lm = df%>%filter(Primary.Position == "LM")%>%select(-c(Preferred.Positions, Primary.Position))
+df_lb = df%>%filter(Primary.Position == "LB")%>%select(-c(Preferred.Positions, Primary.Position))
+df_cam = df%>%filter(Primary.Position == "CAM")%>%select(-c(Preferred.Positions, Primary.Position))
+df_rb = df%>%filter(Primary.Position == "RB")%>%select(-c(Preferred.Positions, Primary.Position))
+df_cf = df%>%filter(Primary.Position == "CF")%>%select(-c(Preferred.Positions, Primary.Position))
+df_rwb = df%>%filter(Primary.Position == "RWB")%>%select(-c(Preferred.Positions, Primary.Position))
+df_lwb = df%>%filter(Primary.Position == "LWB")%>%select(-c(Preferred.Positions, Primary.Position))
+```
+
+## Methods
+
+### Data Pre-processing
+
+Two position groups will be analyzed, strikers and right wing backs. The first test case is the sub-dataset of strikers for two reasons: first, many of the highest-paid players are strikers, making the striker distribution the most skewed of the position group distributions and therefore more difficult to model. Second, it is also one of the larger datasets, meaning principal components `Lasso` will be expected to perform well relative to the cutting plane method (Bertsimas & Van Parys, p. 316). The second test case is the sub-dataset of right wing backs, as it is the smallest sub-dataset, and thus it is expected that the cutting plane method will perform considerably better than the pcLasso if Bertsimas and Van Parys are to be believed.
+
+Before analysis, the `Wage` variable is log-transformed to account for the strong right skew in the response in both sub-datasets. Next, the data are centered such that each variable has mean 0 and unit variance. This step allows the intercept to be omitted in the pcLasso model (Tay *et al*., p. 2).
+
+One final step is taken for the purposes of evaluating the models: each sub-dataset is further divided into a "training" set (70%) and a "test" set (30%). The models will be fit to the training sets, and the predictions of the models on the test set will be used to calculate $MSE$. The training set for the strikers has $n=1514$ observations, and the training set for the right wing backs has $n=72$ observations.
+
+### Using `pcLasso`
+
+The `pcLasso` package provides functionality for using the Tay *et al.* method. Specifically, the `cv.pcLasso` function, which performs cross-validation to select on optimal value of the $\lambda$ constraint parameter, is used. Cross-validation is still only being performed on the training set, so as to identify the optimal $\lambda$ for a model that will see the same information as the models to be built with the exact sparse regression method.
+
+```{r include=F}
+df_st$Wage = log(df_st$Wage)
+df_st = as.data.frame(scale(df_st))
+
+# Set seed for reproducibility
+set.seed(1)
+
+# Keep 70% of dataset as training set and set aside 30% as test
+sample <- sample(c(TRUE, FALSE), nrow(df_st), replace=TRUE, prob=c(0.7,0.3))
+st_train  <- df_st[sample, ]
+st_test   <- df_st[!sample, ]
+
+X_st = as.matrix(st_train[,2:ncol(st_train)])
+y_st = as.vector(st_train$Wage)
+fit_st = cv.pcLasso(X_st, y_st, ratio=0.8)
+```
+
+The plot below shows the results of the cross-validation, allowing for the identification of the optimal model that reduces the number of features while having low MSE.
+
+```{r echo=F}
+plot(fit_st)
+```
+
+The `cv.pcLasso` function returns two $\lambda$ values: $\lambda_{min}$ is the value for $\lambda$ that minimizes $MSE$, while $\lambda_{1SE}$ is "the largest $\lambda$ value with CV error within one standard error of the minimum CV error" (Tay and Tibshirani). As the striker model with the lowest $MSE$ retains $n=63$ features, the model has not performed dimensionality reduction. The model with $\lambda_{1SE}=36$ features has similar $MSE$ to the model with the lowest $MSE$, so for the purposes of balancing predictive power with model dimensionality, $\lambda_{1SE}=36$ is considered optimal. Similarly for the right wing backs sub-dataset, a model with $\lambda_{1SE}=37$ yields a good balance between $MSE$ and dimensionality. These results will be discussed further in the results section.
+
+### Using the Exact Sparse Regression Approach
+
+The `SubsetSelection` package that implements the exact sparse regression method introduced by Bertsimas, Pauphilet, and Van Parys is used on the same pre-processed sub-datasets as the `pcLasso`. The code implementation for this study is included in the appendix.
+
+In their comparison of the exact sparse regression with `Lasso`, Bertsimas and Van Parys assume that the true number of regressors that have an effect on the response is the value $k$. In this paper, the value of $k$ is varied, evaluating an exact sparse regression solution at $k=10,20,30,40$ and $k=k_{pcLasso}$, where $k_{pcLasso}$ is the optimal number of features with non-zero components according to the pcLasso cross-validation. Thus, for the strikers model, $k=\lambda_{1SE}=36$; and for the right wing backs model, $k=\lambda_{1SE}=37$.
+
+## Results
+
+**Figure 1** displays the test $MSE$ for each model fit to the strikers training set. The exact sparse regression models fit with the `Julia` code all outperformed the pcLasso models with respect to test $MSE$, even the exact sparse regression model that only kept $k=10$ features. The features retained by the $k=10$ model were: `Potential`, `Crossing`, `Heading.accuracy`, `Positioning`, `CM`, `LCM`, `LS`, `RCM`, `RS`, and `ST`. The latter six features are all related to the player's unique ability to play a particular position, so it is unsurprising to see attributes related to offensive positions like striker (`ST`) and left striker (`LS`) included in the model (note: how FIFA determines these ratings is not known to the author, and thus these variables were assumed not to be derived from other regressors). However, the fact that `Heading.accuracy` was included in the feature set is somewhat surprising considering the lack of retained features related to shooting, which is a primary role of the striker. The weights for these features are shown in **Figure 3**, showing that `Potential` was the most important predictor of `Wage`.
+
+![Results from prediction on the strikers test set](C:/Users/wagnedg1/Documents/EP/project_pclasso_table.JPG)
+
+![Feature weights for strikers model with *k*=10](C:/Users/wagnedg1/Documents/EP/project_exact_features.JPG)
+
+**Figure 3** displays the test $MSE$ for each model fit to the right wing backs training set. Unlike for the striker dataset, the exact sparse regression models struggle relative to the pcLasso models. Only the exact sparse regression model with $k=20$ outperformed the pcLasso model with $\lambda_{1SE}$ with respect to test $MSE$, and none of the exact sparse regression models had a test $MSE$ less than the pcLasso model that did not eliminate any features.
+
+This result is unexpected based on the results presented by Bertsimas and Van Parys. In their analysis, model performance was better relative to the Lasso when sample sizes were lower (number of regressors held constant). The opposite is happening here. There are two potential reasons for this:
+
+1.  The sample size ($n < 100$) may be too low to observe the benefits of the exact sparse regression method. Bertsimas and Van Parys do observe that the algorithm runs faster at very high $n$ ($n > 100,000$) and is slower at smaller $n$; this could indicate that it is more difficult for the cutting plane algorithm to work before sample size has increased to the point where a "phase transition" can occur (Bertsimas and Van Parys, p. 313).
+2.  The pcLasso method developed by Tay *et al.* significantly outperforms traditional Lasso, such that the benefits of the exact sparse regression approach do not appear relative to pcLasso until particularly high $p$.
+
+![Results from prediction on the right wing backs test set](C:/Users/wagnedg1/Documents/EP/project_exact_table.JPG)
+
+## Conclusions
+
+In the analysis presented in this paper, the exact sparse regression models fit to data with significantly higher $n$ performed better than pcLasso models fit to the same data, whereas the opposite was true with lower $n$. In this way, the general claims of Bertsimas and Van Parys are confirmed with the exception of the relative performance of the exact sparse regression method versus heuristic methods when $n$ is smaller.
+
+The advantages of the exact sparse regression approach over even advanced heuristic methods such as pcLasso are apparent. First, the lack of bias in the exact sparse regression model aids robustness and interpretability. With regards to interpretability, the exact sparse regression method holds particular advantage over pcLasso. Since pcLasso performs the `Lasso` on the principal components of the data, an analyst cannot state which predictors are retained with nonzero coefficients and which are not; rather, only some principal components are retained, and translating the importance of the principal components to the importance of the original predictors is a difficult interpretation task. The reader might note that the "most significant predictors" from the pcLasso models were not included in the results: this is because, in addition to the models retaining many terms, the `pcLasso` package in `R` lacks such functionality.
+
+The second major advantage of the exact sparse regression method is that, in the case of the strikers models, the optimal exact sparse regression model reduced the number of features with nonzero coefficients more than the best pcLasso models.
+
+For the pcLasso method, future work should focus on expanding the interpretability of model results. Currently Tay *et al.* do not provide functionality that allows analysts to see which features are the most important, whereas the feature weights in the exact sparse regression models can be observed in the `SubsetSelection` package's functionality. For the exact sparse regression method, future work should attempt to assess small-*n* cases such as the right wing backs dataset to determine when the exact sparse regression method begins to diminish in effectiveness relative to heuristic methods.
+
+\newpage
+
+## Appendix
+
+For access to the code and datasets used in this paper, please view the following GitHub repository:
+\newline
+<https://github.com/dgwagner/TheoryOfStatisticsI>
+\newline
+The analysis code written in `R` is included throughout and at the bottom of the RMarkdown file that generated this paper, and the code in `Julia` is included in a separate file.
+
+\newpage
+
+## Bibliography
+
+| Bertsimas, D. & Van Parys, B. (2020). Sparse high-dimensional regression: Exact scalable algorithms and 
+|    phase transitions. The Annals of Statistics, 48(1), 300--323. <https://doi.org/10.1214/18-aos1804>
+
+| Bertsimas, D., Pauphilet, J. & Van Parys, B. (2020). Sparse regression: Scalable algorithms and empirical 
+|    performance. Statistical Science, 35(4), 555--578. <https://doi.org/10.1214/19-sts701>
+
+| Tay, J. K., Friedman, J. & Tibshirani, R. (2021). Principal component‐guided sparse regression.	Canadian 
+|    Journal of Statistics, 49(4), 1222--1257. <https://doi.org/10.1002/cjs.11617>
+
+```{r include=F}
+# Make test set a matrix
+X_st_test = as.matrix(st_test[,2:ncol(st_test)])
+y_st_test = as.vector(st_test$Wage)
+# Get predictions on test set for lambda.1se
+preds_opt_st=predict(fit_st, X_st_test, s = "lambda.1se")
+mse_opt_st = mean((st_test$Wage - preds_opt_st)^2)
+# Get predictions on test set for lambda.min
+preds_minLambda_st=predict(fit_st, X_st_test, s = "lambda.min")
+mse_minLambda_st = mean((st_test$Wage - preds_minLambda_st)^2)
+```
+
+```{r include=F}
+# Fit pcLasso with lambda.1se, find number of non-zero features
+opt_fit_st = pcLasso(X_st, y_st, ratio=0.8, lambda=fit_st$lambda.1se)
+opt_fit_st$nzero
+```
+
+```{r include = F}
+# Fit pcLasso with lambda.min, find number of non-zero features
+opt_fit_st = pcLasso(X_st, y_st, ratio=0.8, lambda=fit_st$lambda.min)
+opt_fit_st$nzero
+```
+
+```{r echo=F}
+# Write striker training sets to CSVs to import into Julia
+write.csv(st_train, "C:/Users/wagnedg1/Documents/EP/strikers_train.csv")
+write.csv(st_test, "C:/Users/wagnedg1/Documents/EP/strikers_test.csv")
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=10
+julia_st_k10 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_strikers_k10.csv",header=F)
+mean((st_test$Wage - julia_st_k10$V1)^2)
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=20
+julia_st_k20 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_strikers_k20.csv",header=F)
+mean((st_test$Wage - julia_st_k20$V1)^2)
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=30
+julia_st_k30 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_strikers_k30.csv",header=F)
+mean((st_test$Wage - julia_st_k30$V1)^2)
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=36
+julia_st_k36 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_strikers_k36.csv",header=F)
+mean((st_test$Wage - julia_st_k36$V1)^2)
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=40
+julia_st_k40 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_strikers_k40.csv",header=F)
+mean((st_test$Wage - julia_st_k40$V1)^2)
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=63
+julia_st_k63 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_strikers_k63.csv",header=F)
+mean((st_test$Wage - julia_st_k63$V1)^2)
+```
+
+```{r include=F}
+# Log and center rwbs data
+df_rwb$Wage = log(df_rwb$Wage)
+df_rwb = as.data.frame(scale(df_rwb))
+
+# Set seed for reproducibility
+set.seed(1)
+
+# Keep 70% of dataset as training set and set aside 30% as test
+sample <- sample(c(TRUE, FALSE), nrow(df_rwb), replace=TRUE, prob=c(0.7,0.3))
+rwb_train  <- df_rwb[sample, ]
+rwb_test   <- df_rwb[!sample, ]
+
+# Write rwbs data to CSV for Julia import
+write.csv(rwb_train, "C:/Users/wagnedg1/Documents/EP/rwb_train.csv")
+write.csv(rwb_test, "C:/Users/wagnedg1/Documents/EP/rwb_test.csv")
+```
+
+```{r include=F}
+# Fit pcLasso for rwbs
+X_rwb = as.matrix(rwb_train[,2:ncol(rwb_train)])
+y_rwb = as.vector(rwb_train$Wage)
+fit_rwb = cv.pcLasso(X_rwb, y_rwb, ratio=0.8)
+```
+
+```{r include=F}
+# Log(Lambda) vs MSE for rwb pcLasso model
+plot(fit_rwb)
+```
+
+```{r include=F}
+# Make test set a matrix
+X_rwb_test = as.matrix(rwb_test[,2:ncol(rwb_test)])
+y_rwb_test = as.vector(rwb_test$Wage)
+# Get predictions on test set for lambda.1se
+preds_opt_rwb=predict(fit_rwb, X_rwb_test, s = "lambda.1se")
+mse_opt_rwb = mean((rwb_test$Wage - preds_opt_rwb)^2)
+# Get predictions on test set for lambda.min
+preds_minLambda_rwb=predict(fit_rwb, X_rwb_test, s = "lambda.min")
+mse_minLambda_rwb = mean((rwb_test$Wage - preds_minLambda_rwb)^2)
+```
+
+```{r include=F}
+# Fit pcLasso with lambda.min, find number of non-zero features
+opt_fit_rwb = pcLasso(X_rwb, y_rwb, ratio=0.8, lambda=fit_rwb$lambda.1se)
+opt_fit_rwb$nzero
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=10
+julia_rwb_k10 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_rwbs_k10.csv",header=F)
+mean((rwb_test$Wage - julia_rwb_k10$V1)^2)
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=10
+julia_rwb_k20 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_rwbs_k20.csv",header=F)
+mean((rwb_test$Wage - julia_rwb_k20$V1)^2)
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=10
+julia_rwb_k30 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_rwbs_k30.csv",header=F)
+mean((rwb_test$Wage - julia_rwb_k30$V1)^2)
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=10
+julia_rwb_k37 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_rwbs_k37.csv",header=F)
+mean((rwb_test$Wage - julia_rwb_k37$V1)^2)
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=10
+julia_rwb_k40 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_rwbs_k40.csv",header=F)
+mean((rwb_test$Wage - julia_rwb_k40$V1)^2)
+```
+
+```{r include=F}
+# Calculate MSE of Exact model on test set, k=10
+julia_rwb_k63 = read.csv("C:/Users/wagnedg1/Documents/EP/julia_predictions_rwbs_k63.csv",header=F)
+mean((rwb_test$Wage - julia_rwb_k63$V1)^2)
+```
